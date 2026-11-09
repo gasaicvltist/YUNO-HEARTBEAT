@@ -14,8 +14,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout full repository history
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -23,8 +25,10 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Unpack project
+      - name: Restore deleted source archive
         run: |
+          git show df5d356782c6cd3c9f26e662178f7903af25532d:YUNO_HEARTBEAT_source.zip > YUNO_HEARTBEAT_source.zip
+          test -s YUNO_HEARTBEAT_source.zip
           unzip -q YUNO_HEARTBEAT_source.zip -d extracted
           SETTINGS=$(find extracted -name settings.gradle.kts -print -quit)
           test -n "$SETTINGS"
@@ -45,7 +49,32 @@ jobs:
           EOF
           sed -i 's|android:description="Neon heart that reacts to music"|android:description="@string/widget_description"|' "$PROJECT_DIR/app/src/main/res/xml/heart_widget_info.xml"
 
-      - name: Align Android Java and Kotlin targets
+      - name: Fix HeartRenderer Kotlin colors
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          p = Path(os.environ["PROJECT_DIR"]) / "app/src/main/java/com/yuno/heartbeat/HeartRenderer.kt"
+          s = p.read_text()
+
+          replacements = [
+              ("            color = color\n", "            this.color = color\n", 2),
+              ("            color = Color.WHITE\n", "            this.color = Color.WHITE\n", 1),
+              ("apply { color = color; alpha =", "apply { this.color = color; alpha =", 1),
+          ]
+
+          for old, new, expected in replacements:
+              actual = s.count(old)
+              if actual != expected:
+                  raise SystemExit(f"Expected {expected} occurrences, found {actual}: {old!r}")
+              s = s.replace(old, new)
+
+          p.write_text(s)
+          print("HeartRenderer.kt: all 4 color assignments fixed")
+          PY
+
+      - name: Align Java and Kotlin targets
         run: |
           cat >> "$PROJECT_DIR/app/build.gradle.kts" <<'EOF'
 
