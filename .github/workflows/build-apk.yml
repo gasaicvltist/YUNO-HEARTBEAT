@@ -40,6 +40,339 @@ jobs:
               target.write_bytes(base64.b64decode(payload))
           print(f'Generated {len(files)} project files')
           PY
+             - name: Apply YUNO HEARTBEAT 2.1
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("app/src/main/res/xml/heart_widget_info.xml")
+          p.write_text("""<?xml version="1.0" encoding="utf-8"?>
+          <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+              android:minWidth="60dp"
+              android:minHeight="60dp"
+              android:minResizeWidth="50dp"
+              android:minResizeHeight="50dp"
+              android:initialLayout="@layout/widget_heart"
+              android:resizeMode="horizontal|vertical"
+              android:widgetCategory="home_screen"
+              android:updatePeriodMillis="0"
+              android:description="@string/widget_description"/>
+          """)
+
+          p = Path("app/src/main/java/com/yuno/heartbeat/HeartWidgetProvider.kt")
+          p.write_text("""package com.yuno.heartbeat
+
+          import android.app.PendingIntent
+          import android.appwidget.AppWidgetManager
+          import android.appwidget.AppWidgetProvider
+          import android.content.Context
+          import android.content.Intent
+          import android.widget.RemoteViews
+
+          class HeartWidgetProvider : AppWidgetProvider() {
+              override fun onUpdate(context: Context, manager: AppWidgetManager, ids: IntArray) {
+                  ids.forEach { id ->
+                      val views = RemoteViews(context.packageName, R.layout.widget_heart)
+                      val launch = PendingIntent.getActivity(
+                          context, 0,
+                          Intent(context, MainActivity::class.java),
+                          PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                      )
+                      views.setOnClickPendingIntent(R.id.heart_image, launch)
+                      manager.updateAppWidget(id, views)
+                  }
+              }
+
+              companion object {
+                  fun widgetIds(context: Context): IntArray =
+                      AppWidgetManager.getInstance(context).getAppWidgetIds(
+                          android.content.ComponentName(context, HeartWidgetProvider::class.java)
+                      )
+              }
+          }
+          """)
+
+          p = Path("app/src/main/java/com/yuno/heartbeat/HeartbeatService.kt")
+          p.write_text("""package com.yuno.heartbeat
+
+          import android.app.Notification
+          import android.app.NotificationChannel
+          import android.app.NotificationManager
+          import android.app.Service
+          import android.appwidget.AppWidgetManager
+          import android.content.Intent
+          import android.graphics.*
+          import android.media.audiofx.Visualizer
+          import android.os.Build
+          import android.os.Handler
+          import android.os.IBinder
+          import android.os.Looper
+          import android.widget.RemoteViews
+          import kotlin.math.*
+
+          class HeartbeatService : Service() {
+              private val handler = Handler(Looper.getMainLooper())
+              private var visualizer: Visualizer? = null
+
+              @Volatile private var waveform = ByteArray(1024) { 128.toByte() }
+              @Volatile private var bassInput = 0f
+              @Volatile private var audioInput = false
+
+              private var bassLevel = 0f
+              private var lineAlpha = 0f
+              private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+
+              private val frame = object : Runnable {
+                  override fun run() {
+                      renderAll()
+                      handler.postDelayed(this, 60L)
+                  }
+              }
+
+              override fun onCreate() {
+                  super.onCreate()
+                  startForeground(72, makeNotification())
+                  startVisualizer()
+                  handler.post(frame)
+              }
+
+              private fun makeNotification(): Notification {
+                  val channel = "yuno_heartbeat"
+                  if (Build.VERSION.SDK_INT >= 26) {
+                      getSystemService(NotificationManager::class.java)
+                          .createNotificationChannel(
+                              NotificationChannel(
+                                  channel,
+                                  "YUNO HEARTBEAT",
+                                  NotificationManager.IMPORTANCE_LOW
+                              )
+                          )
+                  }
+                  val builder = if (Build.VERSION.SDK_INT >= 26)
+                      Notification.Builder(this, channel)
+                  else Notification.Builder(this)
+
+                  return builder
+                      .setContentTitle("YUNO HEARTBEAT")
+                      .setContentText("Музыкальная анимация активна")
+                      .setSmallIcon(android.R.drawable.ic_media_play)
+                      .setOngoing(true)
+                      .build()
+              }
+
+              private fun startVisualizer() {
+                  if (visualizer != null) return
+                  try {
+                      val v = Visualizer(0)
+                      v.captureSize = Visualizer.getCaptureSizeRange()[1]
+                          .coerceAtMost(1024)
+
+                      v.setDataCaptureListener(
+                          object : Visualizer.OnDataCaptureListener {
+                              override fun onWaveFormDataCapture(
+                                  v: Visualizer,
+                                  data: ByteArray,
+                                  rate: Int
+                              ) {
+                                  waveform = data.copyOf()
+
+                                  var sum = 0.0
+                                  for (sample in data) {
+                                      val value = (sample.toInt() and 255) - 128
+                                      sum += value * value
+                                  }
+                                  val rms = sqrt(sum / data.size) / 128.0
+                                  audioInput = rms > 0.018
+                              }
+
+                              override fun onFftDataCapture(
+                                  v: Visualizer,
+                                  data: ByteArray,
+                                  rate: Int
+                              ) {
+                                  var sum = 0.0
+                                  var count = 0
+
+                                  for (bin in 1..8) {
+                                      val reIndex = bin * 2
+                                      val imIndex = reIndex + 1
+                                      if (imIndex < data.size) {
+                                          val re = data[reIndex].toInt()
+                                          val im = data[imIndex].toInt()
+                                          sum += sqrt(
+                                              (re * re + im * im).toDouble()
+                                          )
+                                          count++
+                                      }
+                                  }
+
+                                  val raw = if (count > 0)
+                                      (sum / count / 90.0).toFloat()
+                                  else 0f
+
+                                  bassInput = raw.coerceIn(0f, 1f)
+                              }
+                          },
+                          Visualizer.getMaxCaptureRate() / 2,
+                          true,
+                          true
+                      )
+
+                      v.enabled = true
+                      visualizer = v
+                  } catch (_: Throwable) {
+                      visualizer = null
+                  }
+              }
+
+              private fun renderAll() {
+                  val manager = AppWidgetManager.getInstance(this)
+                  val ids = HeartWidgetProvider.widgetIds(this)
+                  if (ids.isEmpty()) return
+
+                  val targetBass = if (audioInput) bassInput else 0f
+                  bassLevel += (targetBass - bassLevel) *
+                      if (targetBass > bassLevel) 0.38f else 0.12f
+
+                  val targetAlpha = if (audioInput) 1f else 0f
+                  lineAlpha += (targetAlpha - lineAlpha) *
+                      if (audioInput) 0.30f else 0.16f
+
+                  ids.forEach { id ->
+                      val opts = manager.getAppWidgetOptions(id)
+                      val density = resources.displayMetrics.density
+
+                      val wDp = opts.getInt(
+                          AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 60
+                      ).coerceAtLeast(50)
+
+                      val hDp = opts.getInt(
+                          AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, 60
+                      ).coerceAtLeast(50)
+
+                      val w = (wDp * density).toInt().coerceIn(120, 900)
+                      val h = (hDp * density).toInt().coerceIn(120, 900)
+
+                      val views = RemoteViews(packageName, R.layout.widget_heart)
+                      views.setImageViewBitmap(R.id.heart_image, drawHeart(w, h))
+                      manager.updateAppWidget(id, views)
+                  }
+              }
+
+              private fun drawHeart(w: Int, h: Int): Bitmap {
+                  val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                  val c = Canvas(bmp)
+                  val side = min(w, h).toFloat()
+                  val cx = w / 2f
+                  val cy = h / 2f
+
+                  val s = side * (0.43f + bassLevel * 0.075f)
+                  val data = waveform
+
+                  val heart = Path().apply {
+                      moveTo(cx, cy + s * 0.76f)
+                      cubicTo(
+                          cx - s * 1.25f, cy + s * 0.05f,
+                          cx - s * 0.95f, cy - s * 0.78f,
+                          cx - s * 0.42f, cy - s * 0.68f
+                      )
+                      cubicTo(
+                          cx - s * 0.12f, cy - s * 0.63f,
+                          cx, cy - s * 0.36f,
+                          cx, cy - s * 0.22f
+                      )
+                      cubicTo(
+                          cx, cy - s * 0.36f,
+                          cx + s * 0.12f, cy - s * 0.63f,
+                          cx + s * 0.42f, cy - s * 0.68f
+                      )
+                      cubicTo(
+                          cx + s * 0.95f, cy - s * 0.78f,
+                          cx + s * 1.25f, cy + s * 0.05f,
+                          cx, cy + s * 0.76f
+                      )
+                      close()
+                  }
+
+                  paint.style = Paint.Style.STROKE
+                  paint.strokeCap = Paint.Cap.ROUND
+                  paint.strokeJoin = Paint.Join.ROUND
+                  paint.strokeWidth = max(2.2f, side * 0.012f)
+                  paint.color = Color.rgb(255, 45, 145)
+                  paint.setShadowLayer(
+                      side * (0.07f + bassLevel * 0.09f),
+                      0f, 0f, Color.rgb(255, 20, 130)
+                  )
+                  c.drawPath(heart, paint)
+                  paint.clearShadowLayer()
+
+                  paint.strokeWidth = max(1f, side * 0.004f)
+                  paint.color = Color.argb(100, 255, 130, 200)
+                  c.drawPath(heart, paint)
+
+                  if (lineAlpha > 0.01f) {
+                      val line = Path()
+                      val left = cx - s * 0.48f
+                      val right = cx + s * 0.48f
+                      val mid = cy - s * 0.02f
+
+                      for (i in 0..100) {
+                          val x = left + (right - left) * i / 100f
+                          val idx = (i.toFloat() / 100f *
+                              (data.size - 1)).toInt()
+                              .coerceIn(0, data.lastIndex)
+
+                          val raw = (
+                              (data[idx].toInt() and 255) - 128
+                          ) / 128f
+
+                          val y = mid - raw * s *
+                              (0.18f + bassLevel * 0.16f)
+
+                          if (i == 0) line.moveTo(x, y)
+                          else line.lineTo(x, y)
+                      }
+
+                      paint.color = Color.argb(
+                          (255 * lineAlpha).toInt().coerceIn(0, 255),
+                          255, 230, 247
+                      )
+                      paint.strokeWidth = max(2f, side * 0.009f)
+                      paint.setShadowLayer(
+                          side * 0.055f,
+                          0f, 0f, Color.rgb(255, 30, 145)
+                      )
+                      c.drawPath(line, paint)
+                      paint.clearShadowLayer()
+                  }
+
+                  paint.style = Paint.Style.FILL
+                  return bmp
+              }
+
+              override fun onStartCommand(
+                  intent: Intent?,
+                  flags: Int,
+                  startId: Int
+              ): Int = START_STICKY
+
+              override fun onDestroy() {
+                  handler.removeCallbacks(frame)
+                  try {
+                      visualizer?.enabled = false
+                      visualizer?.release()
+                  } catch (_: Exception) { }
+                  visualizer = null
+                  super.onDestroy()
+              }
+
+              override fun onBind(intent: Intent?): IBinder? = null
+          }
+          """)
+
+          print("YUNO HEARTBEAT 2.1 sources applied")
+          PY   
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
