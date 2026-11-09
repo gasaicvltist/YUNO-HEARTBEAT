@@ -40,7 +40,7 @@ jobs:
               target.write_bytes(base64.b64decode(payload))
           print(f'Generated {len(files)} project files')
           PY
-             - name: Apply YUNO HEARTBEAT 2.1
+                - name: Apply YUNO HEARTBEAT 2.1
         shell: bash
         run: |
           python3 - <<'PY'
@@ -372,7 +372,7 @@ jobs:
           """)
 
           print("YUNO HEARTBEAT 2.1 sources applied")
-          PY   
+          PY
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
