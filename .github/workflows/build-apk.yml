@@ -37,7 +37,13 @@ jobs:
 
       - name: Fix widget description resource
         run: |
-          sed -i 's|android:description="Neon heart that reacts to music"|android:description="@string/app_name"|' "$PROJECT_DIR/app/src/main/res/xml/heart_widget_info.xml"
+          mkdir -p "$PROJECT_DIR/app/src/main/res/values"
+          cat > "$PROJECT_DIR/app/src/main/res/values/widget_description.xml" <<'EOF'
+          <resources>
+              <string name="widget_description">Neon heart that reacts to music</string>
+          </resources>
+          EOF
+          sed -i 's|android:description="Neon heart that reacts to music"|android:description="@string/widget_description"|' "$PROJECT_DIR/app/src/main/res/xml/heart_widget_info.xml"
 
       - name: Build APK
         run: gradle -p "$PROJECT_DIR" assembleDebug --stacktrace
