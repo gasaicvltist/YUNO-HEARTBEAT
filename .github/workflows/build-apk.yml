@@ -34,10 +34,9 @@ jobs:
         with:
           gradle-version: "8.9"
 
-      - name: Build APK
-        run: gradle -p "$PROJECT_DIR" assembleDebug --stacktrace
-      - name: Build APK
-        run: gradle -p "$PROJECT_DIR" assembleDebug --stacktrace
+      - name: Fix widget description resource
+        run: |
+          sed -i 's|android:description="Neon heart that reacts to music"|android:description="@string/app_name"|' "$PROJECT_DIR/app/src/main/res/xml/heart_widget_info.xml"
 
       - uses: actions/upload-artifact@v4
         with:
