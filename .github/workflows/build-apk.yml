@@ -40,7 +40,7 @@ jobs:
               target.write_bytes(base64.b64decode(payload))
           print(f'Generated {len(files)} project files')
           PY
-                - name: Apply YUNO HEARTBEAT 2.1
+          - name: Apply YUNO HEARTBEAT 2.1
         shell: bash
         run: |
           python3 - <<'PY'
